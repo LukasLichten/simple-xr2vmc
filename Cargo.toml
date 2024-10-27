@@ -12,6 +12,9 @@ keywords = ["openxr","vmc","vtuber","motion-capture"]
 categories = ["command-line-utilities"]
 
 [dependencies]
+dirs = "^5"
+log = "^0.4"
+env_logger="0.10"
 tokio = { version = "^1.41", features = ["full"] }
 mint = "0.5.9"
 openxr = { git = "https://github.com/Ralith/openxrs", branch = "master", features = ["linked", "mint"] }
