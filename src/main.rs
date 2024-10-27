@@ -1,5 +1,6 @@
 use log::{debug, error, info};
-use vmc::VMCMessage;
+
+mod xr;
 
 fn main() {
     let log_level = log::LevelFilter::Debug;
@@ -29,19 +30,20 @@ fn main() {
 }
 
 async fn runner() -> Result<(), Box<dyn std::error::Error>> {
-    // info!("Connecting to OpenXR runtime...");
-    // let entry = openxr::Entry::linked();
-    // 
-    // let _instance = entry
-    //     .create_instance(
-    //         &openxr::ApplicationInfo {
-    //             application_name: "simple-xr2vmc",
-    //             ..Default::default()
-    //         },
-    //         &openxr::ExtensionSet::default(),
-    //         &[],
-    //     )?;
+    let exit = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
+    let (session,vr_loop) = xr::openxr_application(exit.clone()).await?;
+    
+    
+    ctrlc::set_handler(move || {
+        info!("Signal received, winding down");
+
+        if let Err(e) = session.request_exit() {
+            error!("Unable to wind down steamvr: {}", e.to_string());
+            exit.store(true, std::sync::atomic::Ordering::Release);
+        }
+    })?;
+    
 
 
     // info!("Starting VMC Performer (Client)...");
@@ -54,14 +56,24 @@ async fn runner() -> Result<(), Box<dyn std::error::Error>> {
     // let _res = socket.send(VMCMessage::Time(vmc::VMCTime::elapsed())).await;
     
     
-    
 
-
-    
+    log_error!(vr_loop.await);
     
     
-
-
     debug!("Exiting...");
+    
+    // session.request_exit()?;
+    // session.end()?;
+
+
     Ok(())
+}
+
+#[macro_export]
+macro_rules! log_error {
+    ($res:expr) => {
+        if let Err(e) = $res {
+            error!("{}", e.to_string());
+        }
+    };
 }
