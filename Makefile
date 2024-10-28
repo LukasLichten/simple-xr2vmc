@@ -12,7 +12,6 @@ clean:
 	cargo clean
 
 test: 
-	# cargo test -p sample_plugin
 	echo "TODO"
 
 help:

@@ -41,23 +41,38 @@ pub async fn openxr_application(exit: Arc<AtomicBool>) -> Result<(Session<Headle
         session 
     };
 
-    let task = tokio::spawn(event_loop(exit, session.clone()));
+    let app_handle = AppXrHandle {
+        session: session.clone(),
+        exit
+    };
 
+    let task = tokio::spawn(event_loop(app_handle));
 
     Ok((session, task))
 }
 
-async fn event_loop(exit: Arc<AtomicBool>, session: Session<Headless>) {
-    let mut buffer = openxr::EventDataBuffer::new();
+struct AppXrHandle {
+    session: Session<Headless>,
+    exit: Arc<AtomicBool>
+}
 
-    let instance = session.instance();
+/// Required, as without it we can't async sleep otherwise
+struct SaveBuffer {
+    buffer: openxr::EventDataBuffer
+}
+
+unsafe impl Send for SaveBuffer {}
+unsafe impl Sync for SaveBuffer {}
+
+async fn event_loop(app_handle: AppXrHandle) {
+    let mut buffer = SaveBuffer { buffer: openxr::EventDataBuffer::new() };
     
     loop {
-        match instance.poll_event(&mut buffer) {
+        match app_handle.session.instance().poll_event(&mut buffer.buffer) {
             Err(e) => error!("Failed to poll event {}", e.to_string()),
             Ok(None) => (),
             Ok(Some(Event::SessionStateChanged(s))) => {
-                if s.session() == session.as_raw() {
+                if s.session() == app_handle.session.as_raw() {
                     trace!("Entered State {:?}", s.state());
 
                     match s.state() {
@@ -65,18 +80,18 @@ async fn event_loop(exit: Arc<AtomicBool>, session: Session<Headless>) {
                         SessionState::READY => {
                             // View configuration is ignored on headless sessions, suggested to 0
                             debug!("Beginning OpenXR Session...");
-                            log_error!(session.begin(ViewConfigurationType::from_raw(0)));
+                            log_error!(app_handle.session.begin(ViewConfigurationType::from_raw(0)));
                         },
                         SessionState::FOCUSED => {
                             info!("OpenXR Connection Established");
                         },
                         SessionState::STOPPING => {
                             info!("Requesting app end from openxr");
-                            log_error!(session.end());
+                            log_error!(app_handle.session.end());
                         },
                         SessionState::EXITING => {
                             info!("OpenXR exit granted, winding down...");
-                            exit.store(true, std::sync::atomic::Ordering::Release);
+                            app_handle.exit.store(true, std::sync::atomic::Ordering::Release);
                             break;
                         },
                         _ => ()
@@ -88,13 +103,12 @@ async fn event_loop(exit: Arc<AtomicBool>, session: Session<Headless>) {
             }
         }
 
-        // tokio::time::sleep(std::time::Duration::from_micros(100)).await;
-        std::thread::sleep(std::time::Duration::from_micros(100));
+        tokio::time::sleep(std::time::Duration::from_micros(100)).await;
+        // std::thread::sleep(std::time::Duration::from_micros(100));
     
-        if exit.load(std::sync::atomic::Ordering::Acquire) {
+        if app_handle.exit.load(std::sync::atomic::Ordering::Acquire) {
             warn!("Event Loop alternate termination, OpenXR resources might not have been released!");
             break;
         }
     }
-    
 }
