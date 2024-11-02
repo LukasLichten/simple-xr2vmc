@@ -69,14 +69,17 @@ unsafe impl Sync for SaveBuffer {}
 async fn event_loop(app_handle: AppXrHandle) {
     // Create an action set to encapsulate our actions
     let action_set = app_handle.session.instance()
-        .create_action_set("input", "input pose information", 0)
+        .create_action_set("simple-xr2vmc", "XR2VMC Tracking Actions", 0)
         .unwrap();
 
-    let right_action = action_set
-        .create_action::<openxr::Posef>("right_hand", "Right Hand Controller", &[])
-        .unwrap();
+    let right_tracker = Tracker::new(&app_handle.session, &action_set, "right_hand", "Right Hand Pose", 
+                    app_handle.session.instance()
+                        .string_to_path("/user/hand/right/input/grip/pose")
+                        .unwrap())
+                    .unwrap();
+
     let left_action = action_set
-        .create_action::<openxr::Posef>("left_hand", "Left Hand Controller", &[])
+        .create_action::<openxr::Posef>("left_hand", "Left Hand Pose", &[])
         .unwrap();
 
     // Bind our actions to input devices using the given profile
@@ -86,14 +89,10 @@ async fn event_loop(app_handle: AppXrHandle) {
         .suggest_interaction_profile_bindings(
             app_handle.session.instance()
                 .string_to_path("/interaction_profiles/khr/simple_controller")
+                // .string_to_path("/interaction_profiles/valve/index_controller")
                 .unwrap(),
             &[
-                openxr::Binding::new(
-                    &right_action,
-                    app_handle.session.instance()
-                        .string_to_path("/user/hand/right/input/grip/pose")
-                        .unwrap(),
-                ),
+                right_tracker.gen_binding(),
                 openxr::Binding::new(
                     &left_action,
                     app_handle.session.instance()
@@ -106,16 +105,15 @@ async fn event_loop(app_handle: AppXrHandle) {
 
     // Attach the action set to the session
     app_handle.session.attach_action_sets(&[&action_set]).unwrap();
-    let stage = app_handle.session
-            .create_reference_space(openxr::ReferenceSpaceType::STAGE, openxr::Posef::IDENTITY)
-            .unwrap();
 
     // Create an action space for each device we want to locate
-    let right_space = right_action
-        .create_space(&app_handle.session, openxr::Path::NULL, openxr::Posef::IDENTITY)
-        .unwrap();
     let left_space = left_action
         .create_space(&app_handle.session, openxr::Path::NULL, openxr::Posef::IDENTITY)
+        .unwrap();
+
+    // Creating the stage
+    let stage = app_handle.session
+        .create_reference_space(openxr::ReferenceSpaceType::STAGE, openxr::Posef::IDENTITY)
         .unwrap();
 
     let mut buffer = SaveBuffer { buffer: openxr::EventDataBuffer::new() };
@@ -170,6 +168,19 @@ async fn event_loop(app_handle: AppXrHandle) {
             Ok(Some(Event::EventsLost(e))) => {
                 error!("OpenXR event loop missed {} events, may not function correctly", e.lost_event_count());
             },
+            Ok(Some(Event::EyeCalibrationChangedML(_))) => (),
+            Ok(Some(Event::ViveTrackerConnectedHTCX(_c))) => {
+                debug!("Vive Tracker connected");
+            },
+            Ok(Some(Event::ReferenceSpaceChangePending(_))) => {
+                debug!("Reference change pending");
+            },
+            Ok(Some(Event::InteractionProfileChanged(_i))) => {
+                debug!("Interaction Profile Changed");
+            },
+            Ok(Some(Event::UserPresenceChangedEXT(u))) => {
+                debug!("User Presence changed to {}", u.is_user_present());
+            },
             Ok(Some(_)) => {
                 warn!("Unhandled event");
             }
@@ -177,7 +188,7 @@ async fn event_loop(app_handle: AppXrHandle) {
 
         if running {
             let pred_time = {
-                let dur = std::time::Instant::now() - time_rel;
+                let dur = std::time::Instant::now().saturating_duration_since(time_rel);
                 let add:i64 = dur.as_nanos() as i64; // About 500 years before overflow
                 openxr::sys::Time::from_nanos(offset.as_nanos() + add)
 
@@ -189,7 +200,7 @@ async fn event_loop(app_handle: AppXrHandle) {
             app_handle.session.sync_actions(&[(&action_set).into()]).unwrap();
 
             // Find where our controllers are located in the Stage space
-            let right_location = right_space
+            let right_location = right_tracker.space
                 .locate(&stage, pred_time)
                 .unwrap();
 
@@ -209,7 +220,7 @@ async fn event_loop(app_handle: AppXrHandle) {
                 printed = true;
             }
 
-            if right_action.is_active(&app_handle.session, openxr::Path::NULL).unwrap() {
+            if right_tracker.action.is_active(&app_handle.session, openxr::Path::NULL).unwrap() {
                 print!(
                     "Right Hand: ({:0<12},{:0<12},{:0<12})",
                     right_location.pose.position.x,
@@ -234,4 +245,32 @@ async fn event_loop(app_handle: AppXrHandle) {
     }
 }
 
+struct Tracker {
+    action: openxr::Action<openxr::Posef>,
+    space: openxr::Space,
+    path: openxr::Path
+}
 
+impl Tracker {
+    fn new(session: &Session<Headless>, action_set: &openxr::ActionSet, 
+        name: &str, display_name: &str, path: openxr::Path) -> openxr::Result<Self> {
+        let action = action_set
+            .create_action::<openxr::Posef>(name, display_name, &[])?;
+
+        let space = action
+            .create_space(session, openxr::Path::NULL, openxr::Posef::IDENTITY)?;
+
+        Ok(Self{
+            action,
+            space,
+            path
+        })
+    }
+
+    fn gen_binding(&self) -> openxr::Binding {
+        openxr::Binding::new(
+            &self.action,
+            self.path.clone()
+        )
+    }
+}
