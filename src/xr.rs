@@ -10,9 +10,24 @@ pub async fn openxr_application(exit: Arc<AtomicBool>) -> Result<(Session<Headle
     info!("Connecting to OpenXR runtime...");
     let entry = Entry::linked();
 
+
+    let available_extensions = entry.enumerate_extensions()?;
+    if !available_extensions.mnd_headless {
+        error!("Unable to run app in headless mode: Runtime does not support this feature");
+        return Err(Box::new(std::io::Error::from(std::io::ErrorKind::NotFound)));
+    }
+
+    if !available_extensions.htcx_vive_tracker_interaction {
+        error!("Runtime does not support HTCX_VIVE_TRACKER_INTERACTION, 4+ point tracking will not be supported");
+    }
+
+
+
+
     let mut enable_extension = ExtensionSet::default();
     // We could check if headless is available, but nah
     enable_extension.mnd_headless = true; 
+    enable_extension.htcx_vive_tracker_interaction = true;
 
     let instance = entry
         .create_instance(
@@ -89,6 +104,7 @@ async fn event_loop(app_handle: AppXrHandle) {
         .suggest_interaction_profile_bindings(
             app_handle.session.instance()
                 .string_to_path("/interaction_profiles/khr/simple_controller")
+                // .string_to_path("/interaction_profiles/htc/vive_tracker_htcx")
                 // .string_to_path("/interaction_profiles/valve/index_controller")
                 .unwrap(),
             &[
@@ -168,19 +184,23 @@ async fn event_loop(app_handle: AppXrHandle) {
             Ok(Some(Event::EventsLost(e))) => {
                 error!("OpenXR event loop missed {} events, may not function correctly", e.lost_event_count());
             },
-            Ok(Some(Event::EyeCalibrationChangedML(_))) => (),
+            Ok(Some(Event::InteractionProfileChanged(_))) => {
+                // app_handle.session.current_interaction_profile()
+                debug!("Interaction Profile Changed");
+            },
+
+            // These do not seem to work
+            Ok(Some(Event::UserPresenceChangedEXT(u))) => {
+                debug!("User Presence changed to {}", u.is_user_present());
+            },
             Ok(Some(Event::ViveTrackerConnectedHTCX(_c))) => {
                 debug!("Vive Tracker connected");
             },
             Ok(Some(Event::ReferenceSpaceChangePending(_))) => {
                 debug!("Reference change pending");
             },
-            Ok(Some(Event::InteractionProfileChanged(_i))) => {
-                debug!("Interaction Profile Changed");
-            },
-            Ok(Some(Event::UserPresenceChangedEXT(u))) => {
-                debug!("User Presence changed to {}", u.is_user_present());
-            },
+
+            // Extended handling
             Ok(Some(_)) => {
                 warn!("Unhandled event");
             }
@@ -209,7 +229,7 @@ async fn event_loop(app_handle: AppXrHandle) {
                 .unwrap();
 
             let mut printed = false;
-            
+
             if left_action.is_active(&app_handle.session, openxr::Path::NULL).unwrap() {
                 print!(
                     "Left Hand: ({:0<12},{:0<12},{:0<12}), ",

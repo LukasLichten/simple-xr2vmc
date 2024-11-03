@@ -3,7 +3,7 @@ use log::{debug, error, info};
 mod xr;
 
 fn main() {
-    let log_level = log::LevelFilter::Debug;
+    let log_level = log::LevelFilter::Trace;
     env_logger::builder().filter_level(log_level).init();
 
 
